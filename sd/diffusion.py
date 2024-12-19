@@ -39,40 +39,31 @@ class UNET_ResidualBlock(nn.Module):
             self.residual_layer = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0)
     
     def forward(self, feature, time):
-        # feature: (Batch_Size, In_Channels, Height, Width)
-        # time: (1, 1280)
-
+        # Input shapes:
+        #   feature: (batch_size, in_channels, height, width)
+        #   time: (batch_size, 1280)
+        
         residue = feature
         
-        # (Batch_Size, In_Channels, Height, Width) -> (Batch_Size, In_Channels, Height, Width)
-        feature = self.groupnorm_feature(feature)
-        
-        # (Batch_Size, In_Channels, Height, Width) -> (Batch_Size, In_Channels, Height, Width)
+        # Apply group normalization and non-linearity
+        feature = self.groupnorm_feature(feature)  # (batch_size, in_channels, height, width)
         feature = F.silu(feature)
+        feature = self.conv_feature(feature)  # (batch_size, out_channels, height, width)
         
-        # (Batch_Size, In_Channels, Height, Width) -> (Batch_Size, Out_Channels, Height, Width)
-        feature = self.conv_feature(feature)
+        # Process time embedding
+        time = F.silu(time)  # (batch_size, 1280)
+        time = self.linear_time(time)  # (batch_size, out_channels)
         
-        # (1, 1280) -> (1, 1280)
-        time = F.silu(time)
-
-        # (1, 1280) -> (1, Out_Channels)
-        time = self.linear_time(time)
-        
-        # Add width and height dimension to time. 
-        # (Batch_Size, Out_Channels, Height, Width) + (1, Out_Channels, 1, 1) -> (Batch_Size, Out_Channels, Height, Width)
+        # Merge feature and time embeddings
+        # Expand time to match spatial dimensions: (batch_size, out_channels, 1, 1)
         merged = feature + time.unsqueeze(-1).unsqueeze(-1)
         
-        # (Batch_Size, Out_Channels, Height, Width) -> (Batch_Size, Out_Channels, Height, Width)
+        # Final processing
         merged = self.groupnorm_merged(merged)
-        
-        # (Batch_Size, Out_Channels, Height, Width) -> (Batch_Size, Out_Channels, Height, Width)
         merged = F.silu(merged)
+        merged = self.conv_merged(merged)  # (batch_size, out_channels, height, width)
         
-        # (Batch_Size, Out_Channels, Height, Width) -> (Batch_Size, Out_Channels, Height, Width)
-        merged = self.conv_merged(merged)
-        
-        # (Batch_Size, Out_Channels, Height, Width) + (Batch_Size, Out_Channels, Height, Width) -> (Batch_Size, Out_Channels, Height, Width)
+        # Add residual connection
         return merged + self.residual_layer(residue)
 
 class UNET_AttentionBlock(nn.Module):
@@ -94,82 +85,46 @@ class UNET_AttentionBlock(nn.Module):
         self.conv_output = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
     
     def forward(self, x, context):
-        # x: (Batch_Size, Features, Height, Width)
-        # context: (Batch_Size, Seq_Len, Dim)
-
-        residue_long = x
-
-        # (Batch_Size, Features, Height, Width) -> (Batch_Size, Features, Height, Width)
-        x = self.groupnorm(x)
+        # Input shapes:
+        #   x: (batch_size, channels, height, width)
+        #   context: (batch_size, seq_len, dim)
         
-        # (Batch_Size, Features, Height, Width) -> (Batch_Size, Features, Height, Width)
+        residue_long = x
+        
+        # Initial processing
+        x = self.groupnorm(x)
         x = self.conv_input(x)
         
+        # Reshape for attention: (batch_size, channels, height * width) -> (batch_size, height * width, channels)
         n, c, h, w = x.shape
-        
-        # (Batch_Size, Features, Height, Width) -> (Batch_Size, Features, Height * Width)
         x = x.view((n, c, h * w))
-        
-        # (Batch_Size, Features, Height * Width) -> (Batch_Size, Height * Width, Features)
         x = x.transpose(-1, -2)
         
-        # Normalization + Self-Attention with skip connection
-
-        # (Batch_Size, Height * Width, Features)
+        # Self-attention block
         residue_short = x
-        
-        # (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x = self.layernorm_1(x)
-        
-        # (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x = self.attention_1(x)
-        
-        # (Batch_Size, Height * Width, Features) + (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x += residue_short
         
-        # (Batch_Size, Height * Width, Features)
+        # Cross-attention block
         residue_short = x
-
-        # Normalization + Cross-Attention with skip connection
-        
-        # (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x = self.layernorm_2(x)
-        
-        # (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x = self.attention_2(x, context)
-        
-        # (Batch_Size, Height * Width, Features) + (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x += residue_short
         
-        # (Batch_Size, Height * Width, Features)
+        # FFN block with GeGLU
         residue_short = x
-
-        # Normalization + FFN with GeGLU and skip connection
-        
-        # (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x = self.layernorm_3(x)
-        
-        # GeGLU as implemented in the original code: https://github.com/CompVis/stable-diffusion/blob/21f890f9da3cfbeaba8e2ac3c425ee9e998d5229/ldm/modules/attention.py#L37C10-L37C10
-        # (Batch_Size, Height * Width, Features) -> two tensors of shape (Batch_Size, Height * Width, Features * 4)
-        x, gate = self.linear_geglu_1(x).chunk(2, dim=-1) 
-        
-        # Element-wise product: (Batch_Size, Height * Width, Features * 4) * (Batch_Size, Height * Width, Features * 4) -> (Batch_Size, Height * Width, Features * 4)
-        x = x * F.gelu(gate)
-        
-        # (Batch_Size, Height * Width, Features * 4) -> (Batch_Size, Height * Width, Features)
+        x, gate = self.linear_geglu_1(x).chunk(2, dim=-1)
+        x = x * F.gelu(gate)  # GeGLU activation
         x = self.linear_geglu_2(x)
-        
-        # (Batch_Size, Height * Width, Features) + (Batch_Size, Height * Width, Features) -> (Batch_Size, Height * Width, Features)
         x += residue_short
         
-        # (Batch_Size, Height * Width, Features) -> (Batch_Size, Features, Height * Width)
+        # Reshape back to spatial dimensions
         x = x.transpose(-1, -2)
+        x = x.view((n, c, h, w))  # (batch_size, channels, height, width)
         
-        # (Batch_Size, Features, Height * Width) -> (Batch_Size, Features, Height, Width)
-        x = x.view((n, c, h, w))
-
-        # Final skip connection between initial input and output of the block
-        # (Batch_Size, Features, Height, Width) + (Batch_Size, Features, Height, Width) -> (Batch_Size, Features, Height, Width)
+        # Final processing with residual
         return self.conv_output(x) + residue_long
 
 class Upsample(nn.Module):

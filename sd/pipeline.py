@@ -43,32 +43,32 @@ def generate(
         clip.to(device)
         
         if do_cfg:
-            # Convert into a list of length Seq_Len=77
+            # Tokenize the conditional prompt to tensor of shape (1, 77)
             cond_tokens = tokenizer.batch_encode_plus(
                 [prompt], padding="max_length", max_length=77
             ).input_ids
-            # (Batch_Size, Seq_Len)
             cond_tokens = torch.tensor(cond_tokens, dtype=torch.long, device=device)
-            # (Batch_Size, Seq_Len) -> (Batch_Size, Seq_Len, Dim)
+            
+            # Generate text embeddings of shape (1, 77, embed_dim)
             cond_context = clip(cond_tokens)
-            # Convert into a list of length Seq_Len=77
+            
+            # Tokenize the unconditional prompt similarly
             uncond_tokens = tokenizer.batch_encode_plus(
                 [uncond_prompt], padding="max_length", max_length=77
             ).input_ids
-            # (Batch_Size, Seq_Len)
             uncond_tokens = torch.tensor(uncond_tokens, dtype=torch.long, device=device)
-            # (Batch_Size, Seq_Len) -> (Batch_Size, Seq_Len, Dim)
+            
+            # Generate unconditional embeddings
             uncond_context = clip(uncond_tokens)
-            # (Batch_Size, Seq_Len, Dim) + (Batch_Size, Seq_Len, Dim) -> (2 * Batch_Size, Seq_Len, Dim)
+            
+            # Concatenate conditional and unconditional embeddings for CFG
             context = torch.cat([cond_context, uncond_context])
         else:
-            # Convert into a list of length Seq_Len=77
+            # For non-CFG, only process the conditional prompt
             tokens = tokenizer.batch_encode_plus(
                 [prompt], padding="max_length", max_length=77
             ).input_ids
-            # (Batch_Size, Seq_Len)
             tokens = torch.tensor(tokens, dtype=torch.long, device=device)
-            # (Batch_Size, Seq_Len) -> (Batch_Size, Seq_Len, Dim)
             context = clip(tokens)
         to_idle(clip)
 
@@ -81,28 +81,21 @@ def generate(
         latents_shape = (1, 4, LATENTS_HEIGHT, LATENTS_WIDTH)
 
         if input_image:
+            # Process input image for img2img
+            input_image_tensor = input_image.resize((WIDTH, HEIGHT))
+            input_image_tensor = np.array(input_image_tensor)
+            input_image_tensor = torch.tensor(input_image_tensor, dtype=torch.float32, device=device)
+            input_image_tensor = rescale(input_image_tensor, (0, 255), (-1, 1))
+            input_image_tensor = input_image_tensor.unsqueeze(0)  # Add batch dimension
+            input_image_tensor = input_image_tensor.permute(0, 3, 1, 2)  # BHWC -> BCHW
+
+            # Encode input image to latent space
             encoder = models["encoder"]
             encoder.to(device)
-
-            input_image_tensor = input_image.resize((WIDTH, HEIGHT))
-            # (Height, Width, Channel)
-            input_image_tensor = np.array(input_image_tensor)
-            # (Height, Width, Channel) -> (Height, Width, Channel)
-            input_image_tensor = torch.tensor(input_image_tensor, dtype=torch.float32, device=device)
-            # (Height, Width, Channel) -> (Height, Width, Channel)
-            input_image_tensor = rescale(input_image_tensor, (0, 255), (-1, 1))
-            # (Height, Width, Channel) -> (Batch_Size, Height, Width, Channel)
-            input_image_tensor = input_image_tensor.unsqueeze(0)
-            # (Batch_Size, Height, Width, Channel) -> (Batch_Size, Channel, Height, Width)
-            input_image_tensor = input_image_tensor.permute(0, 3, 1, 2)
-
-            # (Batch_Size, 4, Latents_Height, Latents_Width)
             encoder_noise = torch.randn(latents_shape, generator=generator, device=device)
-            # (Batch_Size, 4, Latents_Height, Latents_Width)
             latents = encoder(input_image_tensor, encoder_noise)
 
-            # Add noise to the latents (the encoded input image)
-            # (Batch_Size, 4, Latents_Height, Latents_Width)
+            # Add noise based on strength parameter
             sampler.set_strength(strength=strength)
             latents = sampler.add_noise(latents, sampler.timesteps[0])
 
@@ -116,25 +109,24 @@ def generate(
 
         timesteps = tqdm(sampler.timesteps)
         for i, timestep in enumerate(timesteps):
-            # (1, 320)
+            # Generate timestep embeddings
             time_embedding = get_time_embedding(timestep).to(device)
 
-            # (Batch_Size, 4, Latents_Height, Latents_Width)
             model_input = latents
 
             if do_cfg:
-                # (Batch_Size, 4, Latents_Height, Latents_Width) -> (2 * Batch_Size, 4, Latents_Height, Latents_Width)
+                # Duplicate input for conditional and unconditional paths
                 model_input = model_input.repeat(2, 1, 1, 1)
 
-            # model_output is the predicted noise
-            # (Batch_Size, 4, Latents_Height, Latents_Width) -> (Batch_Size, 4, Latents_Height, Latents_Width)
+            # Predict noise for current timestep
             model_output = diffusion(model_input, context, time_embedding)
 
             if do_cfg:
+                # Apply classifier-free guidance
                 output_cond, output_uncond = model_output.chunk(2)
                 model_output = cfg_scale * (output_cond - output_uncond) + output_uncond
 
-            # (Batch_Size, 4, Latents_Height, Latents_Width) -> (Batch_Size, 4, Latents_Height, Latents_Width)
+            # Denoising step
             latents = sampler.step(timestep, latents, model_output)
 
         to_idle(diffusion)
