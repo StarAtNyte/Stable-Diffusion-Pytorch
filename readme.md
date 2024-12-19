@@ -68,7 +68,7 @@ You can use the demo.ipynb for inference or use inference.py from the command li
 
 ### CD into sd
 ```bash
-    cd sd
+cd sd
 ```
 
 ### Basic Text-to-Image Generation
