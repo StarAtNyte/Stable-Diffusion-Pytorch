@@ -64,8 +64,13 @@ Stable-Diffusion-Pytorch/
 
 ## Usage
 
-You can use the demo.ipynb for inference or use inference.py from the command line.
+There are multiple ways to interact with this Stable Diffusion implementation:
 
+## 1. Jupyter Notebook (demo.ipynb)
+
+For interactive experimentation and development
+
+## 2. Command Line Interface (inference.py)
 ### CD into sd
 ```bash
 cd sd
