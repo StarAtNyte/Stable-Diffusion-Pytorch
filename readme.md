@@ -47,7 +47,7 @@ Stable-Diffusion-Pytorch/
 │   ├── v1-5-pruned-emaonly.ckpt
 │   ├── vocab.json
 │   └── merges.txt
-├── images/                    # For input/output images
+├── images/                    
 ├── sd/
 │   ├── inference.py     # Main inference script
 │   ├── model_loader.py
