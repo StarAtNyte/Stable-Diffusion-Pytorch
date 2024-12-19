@@ -48,7 +48,7 @@ Stable-Diffusion-Pytorch/
 │   ├── vocab.json
 │   └── merges.txt
 ├── images/                    # For input/output images
-├── src/
+├── sd/
 │   ├── inference.py     # Main inference script
 │   ├── model_loader.py
 │   └── attention.py
@@ -69,7 +69,7 @@ You can use the demo.ipynb for inference or use inference.py from the command li
 ### Basic Text-to-Image Generation
 
 ```bash
-python src/inference.py \
+python sd/inference.py \
     --prompt "A stunning mountain landscape at sunset, photorealistic, 8k resolution" \
     --output output.png
 ```
@@ -78,7 +78,7 @@ python src/inference.py \
 ### Image-to-Image Generation
 
 ```bash
-python src/inference.py \
+python sd/inference.py \
     --prompt "A dog with sunglasses" \
     --image-path input.jpg \
     --strength 0.9 \
@@ -88,7 +88,7 @@ python src/inference.py \
 ### Advanced Options
 
 ```bash
-python src/inference.py \
+python sd/inference.py \
     --prompt "Your detailed prompt here" \
     --negative-prompt "Low quality, blurry, bad anatomy" \
     --cfg-scale 7.5 \
@@ -113,7 +113,7 @@ python src/inference.py \
 
 Example:
 ```bash
-python src/inference.py \
+python sd/inference.py \
     --prompt "portrait of a young woman with long flowing red hair, freckles, emerald green eyes, soft smile, natural lighting, shallow depth of field, shot on Canon EOS R5, 85mm f/1.2 lens, professional photography, 8k resolution, hyperrealistic detail" \
     --negative-prompt "blurry, low quality, distorted, deformed" \
     --cfg-scale 7.5 \
